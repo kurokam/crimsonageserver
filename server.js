@@ -1,6 +1,7 @@
 'use strict';
 // Kızıl Çağ çevrimiçi sunucusu: liderlik tablosu + oyuncular arası eşya takası.
-// Bağımlılık yok (yalnızca Node'un kendi modülleri). Çalıştırma: node server.js   (PORT, DATA_FILE, TRUST_PROXY ortam değişkenleri)
+// Bağımlılık yok (yalnızca Node'un kendi modülleri). Çalıştırma: node server.js
+// Ortam: PORT, HOST, TRUST_PROXY, DATA_FILE (dosya deposu) veya UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (kalıcı bulut depo; ücretsiz Render için önerilir)
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -8,19 +9,47 @@ const crypto = require('crypto');
 
 const HEROES = ['gorak', 'golge', 'saman', 'avci', 'muhafiz', 'zehir', 'ozan', 'kan'];
 const SLOTS = ['weapon', 'armor', 'charm'];
-const LIMITS = { body: 16 * 1024, players: 200000, offer: 6, roomTtl: 15 * 60 * 1000, doneTtl: 10 * 60 * 1000, rate: 300, rateWin: 60 * 1000, regPerHour: 10 };
+const LIMITS = { body: 16 * 1024, players: 200000, offer: 6, roomTtl: 15 * 60 * 1000, doneTtl: 10 * 60 * 1000, rate: 300, rateWin: 60 * 1000, regPerHour: 30, save: 500 * 1024, saveGap: 15 * 1000 };
 
-function start(opts = {}) {
+// ---- depolama: oyuncu/skor listesi + oyuncu başına kayıt dosyası ----
+function fileStore(dataFile) {
+  const dir = dataFile + '.saves';
+  return {
+    kind: 'file',
+    loadPlayers: async () => { try { const d = JSON.parse(fs.readFileSync(dataFile, 'utf8')); return d && d.players ? d : { players: {} }; } catch (e) { return { players: {} }; } },
+    savePlayers: async db => { fs.writeFileSync(dataFile + '.tmp', JSON.stringify(db)); fs.renameSync(dataFile + '.tmp', dataFile); },
+    getBlob: async id => { try { return fs.readFileSync(path.join(dir, id + '.json'), 'utf8'); } catch (e) { return null; } },
+    putBlob: async (id, str) => { fs.mkdirSync(dir, { recursive: true }); const f = path.join(dir, id + '.json'); fs.writeFileSync(f + '.tmp', str); fs.renameSync(f + '.tmp', f); }
+  };
+}
+function redisStore(url, token, fetchFn) {   // Upstash Redis REST: ücretsiz sunucularda disk silinse de veri kalır
+  const call = async cmd => {
+    const r = await fetchFn(url, { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify(cmd) });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || ('HTTP ' + r.status));
+    return j.result;
+  };
+  return {
+    kind: 'redis',
+    loadPlayers: async () => { const v = await call(['GET', 'kizil:players']); const d = v ? JSON.parse(v) : null; return d && d.players ? d : { players: {} }; },
+    savePlayers: async db => { await call(['SET', 'kizil:players', JSON.stringify(db)]); },
+    getBlob: async id => call(['GET', 'kizil:save:' + id]),
+    putBlob: async (id, str) => { await call(['SET', 'kizil:save:' + id, str]); }
+  };
+}
+
+async function start(opts = {}) {
   const dataFile = opts.dataFile || process.env.DATA_FILE || path.join(__dirname, 'data.json');
   const trustProxy = opts.trustProxy ?? process.env.TRUST_PROXY === '1';
+  const rUrl = opts.redisUrl || process.env.UPSTASH_REDIS_REST_URL, rTok = opts.redisToken || process.env.UPSTASH_REDIS_REST_TOKEN;
+  const store = rUrl && rTok ? redisStore(rUrl, rTok, opts.fetch || fetch) : fileStore(dataFile);
   let db = { players: {} };
-  try { db = JSON.parse(fs.readFileSync(dataFile, 'utf8')); if (!db.players) db = { players: {} }; } catch (e) { /* ilk çalıştırma */ }
-  let saveT = null;
+  try { db = await store.loadPlayers(); } catch (e) { console.error('Depo okunamadı, sunucu başlatılmıyor:', e.message); throw e; }   // boş başlayıp mevcut veriyi ezmemek için durur
+  let saveT = null, dirty = false;
+  const flush = async () => { if (!dirty) return; dirty = false; try { await store.savePlayers(db); } catch (e) { dirty = true; console.error('Kayıt yazılamadı:', e.message); } };
   const persist = () => {
-    clearTimeout(saveT);
-    saveT = setTimeout(() => {
-      try { fs.writeFileSync(dataFile + '.tmp', JSON.stringify(db)); fs.renameSync(dataFile + '.tmp', dataFile); } catch (e) { console.error('Kayıt yazılamadı:', e.message); }
-    }, 500);
+    dirty = true; clearTimeout(saveT);
+    saveT = setTimeout(flush, store.kind === 'redis' ? 2500 : 500);
     if (saveT.unref) saveT.unref();
   };
   const rooms = new Map();      // kod -> oda
@@ -151,6 +180,25 @@ function start(opts = {}) {
       if (r && r.players.some(x => x.id === b.id) && r.status === 'open') { r.status = 'cancelled'; r.ended = Date.now(); r.players.forEach(x => { if (inRoom.get(x.id) === r.code) inRoom.delete(x.id); }); }
       return [200, { ok: true }];
     },
+    'POST /api/save': async b => {
+      const p = auth(b); if (!p) return [401, { error: 'auth' }];
+      if (typeof b.data !== 'string' || b.data.length > LIMITS.save) return [413, { error: 'big' }];
+      let o; try { o = JSON.parse(b.data); } catch (e) { return [400, { error: 'json' }]; }
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return [400, { error: 'json' }];
+      const now = Date.now(); if (now - (p.lastSave || 0) < LIMITS.saveGap) return [429, { error: 'rate' }];
+      await store.putBlob(b.id, b.data);
+      p.lastSave = now; p.saveAt = now; p.saveSeen = Number.isFinite(o.seen) ? o.seen : now; persist();
+      return [200, { at: p.saveAt, seen: p.saveSeen }];
+    },
+    'POST /api/load': async b => {
+      const p = auth(b); if (!p) return [401, { error: 'auth' }];
+      const data = await store.getBlob(b.id); if (!data) return [404, { error: 'nosave' }];
+      return [200, { data, seen: p.saveSeen || 0, at: p.saveAt || 0 }];
+    },
+    'POST /api/me': b => {
+      const p = auth(b); if (!p) return [401, { error: 'auth' }];
+      return [200, { name: p.name, saveAt: p.saveAt || 0, saveSeen: p.saveSeen || 0 }];
+    },
     'GET /api/leaderboard': (b, ip, q) => {
       const board = q.get('board') === 'wave' ? 'wave' : 'tower', me = q.get('id');
       const all = Object.entries(db.players).filter(([, p]) => p[board] > 0).sort((a, c) => c[1][board] - a[1][board] || a[1].created - c[1].created);
@@ -170,19 +218,19 @@ function start(opts = {}) {
     let url; try { url = new URL(req.url, 'http://x'); } catch (e) { send(400, { error: 'url' }); return; }
     const h = routes[req.method + ' ' + url.pathname];
     if (!h) { send(404, { error: 'not_found' }); return; }
-    const run = body => { try { const [c, o] = h(body, ip, url.searchParams); send(c, o); } catch (e) { console.error(e); send(500, { error: 'server' }); } };
+    const run = body => { Promise.resolve().then(() => h(body, ip, url.searchParams)).then(([c, o]) => send(c, o)).catch(e => { console.error(e); send(500, { error: 'server' }); }); };
     if (req.method === 'GET') { run({}); return; }
-    let size = 0; const chunks = [];
-    req.on('data', c => { size += c.length; if (size > LIMITS.body) { send(413, { error: 'big' }); req.destroy(); } else chunks.push(c); });
+    let size = 0; const chunks = [], maxBody = url.pathname === '/api/save' ? LIMITS.save + 4096 : LIMITS.body;
+    req.on('data', c => { size += c.length; if (size > maxBody) { send(413, { error: 'big' }); req.destroy(); } else chunks.push(c); });
     req.on('end', () => {
-      if (size > LIMITS.body) return;
+      if (size > maxBody) return;
       let body; try { body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch (e) { send(400, { error: 'json' }); return; }
       if (!body || typeof body !== 'object' || Array.isArray(body)) { send(400, { error: 'json' }); return; }
       run(body);
     });
   });
   const port = opts.port ?? Number(process.env.PORT || 8787);
-  return new Promise(resolve => server.listen(port, opts.host || process.env.HOST || '0.0.0.0', () => resolve({ server, port: server.address().port, db, rooms, close: () => new Promise(r => { clearInterval(sweeper); clearTimeout(saveT); server.close(r); }) })));
+  return new Promise(resolve => server.listen(port, opts.host || process.env.HOST || '0.0.0.0', () => resolve({ server, port: server.address().port, db, rooms, store, close: async () => { clearInterval(sweeper); clearTimeout(saveT); await flush(); await new Promise(r => server.close(r)); } })));
 }
 
 module.exports = { start };

@@ -3,7 +3,7 @@ services:
   - type: web
     name: kizil-cag-server
     runtime: node
-    plan: free                  # ücretsiz: skorlar sunucu yeniden başlayınca silinir (aşağıdaki disk satırlarına bakın)
+    plan: free                  # ücretsiz; veri kalıcılığı için Upstash değişkenlerini girin (DEPLOY-RENDER.md adım 6)
     buildCommand: "echo no build"
     startCommand: node server.js
     healthCheckPath: /api/health
@@ -12,6 +12,11 @@ services:
         value: "1"
       - key: NODE_VERSION
         value: "20"
+      # Kalıcı depo (ücretsiz, önerilen): upstash.com'da Redis veritabanı açıp REST adresini ve belirteci Render panelinde girin
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
     # Skorların kalıcı olması için (ücretli plan gerekir): plan'ı 'starter' yapın ve aşağıyı açın
     # plan: starter
     # disk:

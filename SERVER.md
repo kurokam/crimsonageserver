@@ -13,6 +13,7 @@ node server.js            # varsayılan: 0.0.0.0:8787
 | `PORT` | Dinlenecek port (varsayılan 8787) |
 | `HOST` | Dinlenecek adres (varsayılan 0.0.0.0) |
 | `DATA_FILE` | Oyuncu/skor dosyası (varsayılan `server/data.json`; düzenli yedekleyin) |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | İkisi de verilirse veri dosya yerine Upstash Redis'e yazılır (kalıcı, ücretsiz sunucular için önerilir). Redis okunamazsa sunucu başlamaz (boş başlayıp mevcut veriyi ezmesin diye) |
 | `TRUST_PROXY=1` | Nginx/Caddy arkasındaysanız gerçek IP'yi `X-Forwarded-For`'dan alır (hız sınırı için şart) |
 
 ## Yayına alma (öneri)
@@ -29,11 +30,13 @@ node server.js            # varsayılan: 0.0.0.0:8787
 ## API (hepsi JSON, CORS açık)
 - `POST /api/register {name}` → `{id, token}` · `POST /api/rename` · `POST /api/score {id,token,tower,wave}` · `GET /api/leaderboard?board=tower|wave&id=`
 - Takas: `POST /api/trade/create | join | state | offer | confirm | cancel`
+- Bulut kayıt: `POST /api/save {id,token,data}` (≤500 KB, oyuncu başına 15 sn'de bir) · `POST /api/load {id,token}` → `{data,seen,at}` · `POST /api/me {id,token}` → `{name,saveAt,saveSeen}`
+  Kayıtlar dosya modunda `DATA_FILE.saves/<id>.json`, Redis modunda `kizil:save:<id>` anahtarında durur. Kayıt sahibi yalnızca belirteci bilen kişidir (kurtarma kodu = `id.token`).
 
 ## Güvenlik modeli — neleri korur, neleri korumaz
 Korur:
 - Belirteçler sunucuda yalnızca SHA-256 özeti olarak saklanır; yanlış belirteç reddedilir.
-- Her istek doğrulanır (ad, eşya biçimi, değer sınırları, ≤6 eşya, ≤16 KB gövde), IP başına dakikada 300 istek ve saatte 10 kayıt sınırı vardır.
+- Her istek doğrulanır (ad, eşya biçimi, değer sınırları, ≤6 eşya, ≤16 KB gövde), IP başına dakikada 300 istek ve saatte 30 kayıt sınırı vardır.
 - Takasta **iki taraf da onaylamadan hiçbir şey el değiştirmez**; teklif değişince iki onay da sıfırlanır; onay, görülen teklif sürümüne bağlıdır (kayan teklif hilesi engellenir).
 - İstemci, aynı takası iki kez uygulamaz; çanta sınırını (50) aşmaz; sunucudan gelen eşyayı doğrular; teklif edilen eşya takas sürerken satılamaz/kuşanılamaz.
 
