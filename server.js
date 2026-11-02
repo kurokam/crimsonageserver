@@ -9,6 +9,8 @@ const crypto = require('crypto');
 
 const HEROES = ['gorak', 'golge', 'saman', 'avci', 'muhafiz', 'zehir', 'ozan', 'kan'];
 const SLOTS = ['weapon', 'head', 'armor', 'hands', 'feet', 'charm', 'ring'];
+const SEC_KEYS = ['crit', 'haste', 'steal', 'guard', 'regen', 'loot'];
+const secOk = x => Array.isArray(x) && x.length <= 3 && x.every(p => Array.isArray(p) && p.length === 2 && SEC_KEYS.includes(p[0]) && Number.isFinite(p[1]) && p[1] > 0 && p[1] <= 40);
 const LIMITS = { body: 16 * 1024, players: 200000, offer: 6, roomTtl: 15 * 60 * 1000, doneTtl: 10 * 60 * 1000, rate: 300, rateWin: 60 * 1000, regPerHour: 30, save: 500 * 1024, saveGap: 15 * 1000 };
 
 // ---- depolama: oyuncu/skor listesi + oyuncu başına kayıt dosyası ----
@@ -84,8 +86,8 @@ async function start(opts = {}) {
   const sweeper = setInterval(sweep, 30000); if (sweeper.unref) sweeper.unref();
 
   const validItem = it => it && typeof it === 'object' && SLOTS.includes(it.slot) && isInt(it.rar, 0, 3) && isInt(it.val, 1, 100000) &&
-    HEROES.includes(it.hero) && isInt(it.pi, 0, 30) && isInt(it.bi, 0, 30);
-  const pickItem = it => ({ slot: it.slot, rar: it.rar, val: it.val, hero: it.hero, pi: it.pi, bi: it.bi });
+    HEROES.includes(it.hero) && isInt(it.pi, 0, 30) && isInt(it.bi, 0, 30) && (it.sec === undefined || secOk(it.sec));
+  const pickItem = it => { const c = { slot: it.slot, rar: it.rar, val: it.val, hero: it.hero, pi: it.pi, bi: it.bi }; if (it.sec && it.sec.length) c.sec = it.sec.map(p => [p[0], p[1]]); return c; };
   const auth = b => {
     if (!b || typeof b.id !== 'string' || typeof b.token !== 'string' || b.token.length > 100) return null;
     const p = db.players[b.id]; if (!p) return null;
