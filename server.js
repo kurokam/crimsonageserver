@@ -8,7 +8,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const HEROES = ['gorak', 'golge', 'saman', 'avci', 'muhafiz', 'zehir', 'ozan', 'kan'];
-const SLOTS = ['weapon', 'armor', 'charm'];
+const SLOTS = ['weapon', 'head', 'armor', 'hands', 'feet', 'charm', 'ring'];
 const LIMITS = { body: 16 * 1024, players: 200000, offer: 6, roomTtl: 15 * 60 * 1000, doneTtl: 10 * 60 * 1000, rate: 300, rateWin: 60 * 1000, regPerHour: 30, save: 500 * 1024, saveGap: 15 * 1000 };
 
 // ---- depolama: oyuncu/skor listesi + oyuncu başına kayıt dosyası ----
