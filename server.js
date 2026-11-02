@@ -62,6 +62,9 @@ async function start(opts = {}) {
   const hash = t => crypto.createHash('sha256').update(t).digest('hex');
   const rid = n => crypto.randomBytes(n).toString('hex');
   const isInt = (v, lo, hi) => Number.isInteger(v) && v >= lo && v <= hi;
+  // Ad benzersizdir: büyük/küçük harf, boşluk ve _ . - farkları ile i/ı/İ ayrımı yok sayılır (taklit adları önler)
+  const nameKey = n => String(n).normalize('NFKC').toLowerCase().replace(/[\u0307\s_.\-]/g, '').replace(/ı/g, 'i');
+  const nameTaken = (n, exceptId) => { const k = nameKey(n); return Object.keys(db.players).some(id => id !== exceptId && nameKey(db.players[id].name) === k); };
   const cleanName = s => {
     if (typeof s !== 'string') return null;
     const n = s.trim().replace(/\s+/g, ' ');
@@ -111,6 +114,7 @@ async function start(opts = {}) {
     'POST /api/register': (b, ip) => {
       if (!rateOk(regs, ip, LIMITS.regPerHour, 3600e3)) return [429, { error: 'rate' }];
       const name = cleanName(b.name); if (!name) return [400, { error: 'name' }];
+      if (nameTaken(name)) return [409, { error: 'taken' }];
       if (Object.keys(db.players).length >= LIMITS.players) return [503, { error: 'full' }];
       const id = rid(8), token = rid(24);
       db.players[id] = { name, token: hash(token), tower: 0, wave: 0, created: Date.now(), last: 0 };
@@ -119,6 +123,7 @@ async function start(opts = {}) {
     'POST /api/rename': b => {
       const p = auth(b); if (!p) return [401, { error: 'auth' }];
       const name = cleanName(b.name); if (!name) return [400, { error: 'name' }];
+      if (nameTaken(name, b.id)) return [409, { error: 'taken' }];
       p.name = name; persist(); return [200, { name }];
     },
     'POST /api/score': b => {
