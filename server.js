@@ -89,8 +89,8 @@ async function start(opts = {}) {
   const sweeper = setInterval(sweep, 30000); if (sweeper.unref) sweeper.unref();
 
   const validItem = it => it && typeof it === 'object' && SLOTS.includes(it.slot) && isInt(it.rar, 0, 3) && isInt(it.val, 1, 100000) &&
-    HEROES.includes(it.hero) && isInt(it.pi, 0, 30) && isInt(it.bi, 0, 30) && (it.sec === undefined || secOk(it.sec));
-  const pickItem = it => { const c = { slot: it.slot, rar: it.rar, val: it.val, hero: it.hero, pi: it.pi, bi: it.bi }; if (it.sec && it.sec.length) c.sec = it.sec.map(p => [p[0], p[1]]); return c; };
+    HEROES.includes(it.hero) && isInt(it.pi, 0, 30) && isInt(it.bi, 0, 30) && (it.sec === undefined || secOk(it.sec)) && (it.ss === undefined || isInt(it.ss, 0, 3));
+  const pickItem = it => { const c = { slot: it.slot, rar: it.rar, val: it.val, hero: it.hero, pi: it.pi, bi: it.bi }; if (it.sec && it.sec.length) c.sec = it.sec.map(p => [p[0], p[1]]); if (it.ss !== undefined) c.ss = it.ss; return c; };
   const auth = b => {
     if (!b || typeof b.id !== 'string' || typeof b.token !== 'string' || b.token.length > 100) return null;
     const p = db.players[b.id]; if (!p) return null;
@@ -194,17 +194,17 @@ async function start(opts = {}) {
       if (!o || typeof o !== 'object' || Array.isArray(o)) return [400, { error: 'json' }];
       const now = Date.now(); if (now - (p.lastSave || 0) < LIMITS.saveGap) return [429, { error: 'rate' }];
       await store.putBlob(b.id, b.data);
-      p.lastSave = now; p.saveAt = now; p.saveSeen = Number.isFinite(o.seen) ? o.seen : now; persist();
+      p.lastSave = now; p.saveAt = now; p.saveSeen = Number.isFinite(o.seen) ? o.seen : now; p.saveWave = Number.isFinite(o.maxWave) ? o.maxWave : 0; persist();
       return [200, { at: p.saveAt, seen: p.saveSeen }];
     },
     'POST /api/load': async b => {
       const p = auth(b); if (!p) return [401, { error: 'auth' }];
       const data = await store.getBlob(b.id); if (!data) return [404, { error: 'nosave' }];
-      return [200, { data, seen: p.saveSeen || 0, at: p.saveAt || 0 }];
+      return [200, { data, seen: p.saveSeen || 0, at: p.saveAt || 0, wave: p.saveWave || 0 }];
     },
     'POST /api/me': b => {
       const p = auth(b); if (!p) return [401, { error: 'auth' }];
-      return [200, { name: p.name, saveAt: p.saveAt || 0, saveSeen: p.saveSeen || 0 }];
+      return [200, { name: p.name, saveAt: p.saveAt || 0, saveSeen: p.saveSeen || 0, saveWave: p.saveWave || 0 }];
     },
     'GET /api/leaderboard': (b, ip, q) => {
       const board = q.get('board') === 'wave' ? 'wave' : 'tower', me = q.get('id');
